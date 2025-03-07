@@ -8,6 +8,8 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.provider.Settings;
 import android.util.Log;
+import android.view.MenuItem;
+import android.view.View;
 
 import org.luckypray.dexkit.DexKitBridge;
 import org.luckypray.dexkit.query.FindMethod;
@@ -21,6 +23,7 @@ import java.util.Objects;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
+import de.robv.android.xposed.XC_MethodReplacement;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
@@ -31,40 +34,49 @@ public class HookEntrance implements IXposedHookLoadPackage {
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
-        hookDevelopmentMode();
-        XposedHelpers.findAndHookMethod(
-                Application.class,
-                "attach",
-                Context.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        Context context = (Context) param.args[0];
-                        try {
-                            hookMenuItemEnabled(context);
-                        } catch (Exception e) {
-                            Log.e(TAG, "hook menu item failed.", e);
-                        }
-                    }
+        if (!lpparam.isFirstApplication) {
+            return;
+        }
+
+        Class<?> R_ID_Class = lpparam.classLoader.loadClass("com.oplus.ota.R$id");
+        XposedHelpers.findAndHookMethod("androidx.appcompat.view.menu.MenuItemImpl", lpparam.classLoader, "setEnabled", boolean.class, new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) {
+                MenuItem instance = (MenuItem) param.thisObject;
+                int itemId = instance.getItemId();
+                int targetId = XposedHelpers.getStaticIntField(R_ID_Class, "local_upgrade");
+                Log.d(TAG, "item id: " + itemId + ", target id: " + targetId);
+                if (itemId == targetId) {
+                    Log.d(TAG, "hook menu item: " + instance.getTitle());
+                    param.args[0] = true;
                 }
-        );
+            }
+        });
+
+        hookDevelopmentMode();
+        XposedHelpers.findAndHookMethod(Application.class, "attach", Context.class, new XC_MethodHook() {
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) {
+                Context context = (Context) param.args[0];
+                try {
+                    hookMenuItemEnabled(context);
+                } catch (Exception e) {
+                    Log.e(TAG, "hook menu item failed.", e);
+                }
+            }
+        });
     }
 
     private static void hookDevelopmentMode() {
-        XposedHelpers.findAndHookMethod(
-                Settings.Global.class,
-                "getInt",
-                ContentResolver.class, String.class, int.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                        if (Objects.equals(param.args[1], "development_settings_enabled")) {
-                            Log.i(TAG, "enable development mode.");
-                            param.setResult(1);
-                        }
-                    }
+        XposedHelpers.findAndHookMethod(Settings.Global.class, "getInt", ContentResolver.class, String.class, int.class, new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                if (Objects.equals(param.args[1], "development_settings_enabled")) {
+                    Log.i(TAG, "enable development mode.");
+                    param.setResult(1);
                 }
-        );
+            }
+        });
     }
 
     private static void hookMenuItemEnabled(Context context) throws PackageManager.NameNotFoundException, NoSuchMethodException {
@@ -130,18 +142,19 @@ public class HookEntrance implements IXposedHookLoadPackage {
             targetHookMethod2 = new DexMethod(Objects.requireNonNull(descriptor2)).getMethodInstance(cl);
         }
 
-        XposedBridge.hookMethod(targetHookMethod1, new XC_MethodHook() {
+        Log.d(TAG, "target hook method: [m1] " + targetHookMethod1.toGenericString() + ", [m2] " + targetHookMethod2.toGenericString());
+
+        XposedBridge.hookMethod(targetHookMethod1, new XC_MethodReplacement() {
             @Override
-            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                param.setResult(true);
+            protected Object replaceHookedMethod(MethodHookParam param) {
+                return true;
             }
         });
 
-        XposedBridge.hookMethod(targetHookMethod2, new XC_MethodHook() {
+        XposedBridge.hookMethod(targetHookMethod2, new XC_MethodReplacement() {
             @Override
-            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                super.beforeHookedMethod(param);
-                param.setResult(false);
+            protected Object replaceHookedMethod(MethodHookParam param) {
+                return false;
             }
         });
     }
